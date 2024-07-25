@@ -180,6 +180,17 @@ class AllocatorHandle {
   }
 
   /**
+   * Same as parallel_do_bounded, but does omits the scan operation.
+   * @tparam T Base class
+   * @tparam func Member function to be run in parallel
+   * @param bound Number of blocks
+   */
+  template<class T, void(T::*func)()>
+  void fast_parallel_do_bounded(int bound) {
+    allocator_->template parallel_do_bounded<false, T, func>(bound);
+  }
+
+  /**
    * Like parallel_do, but enumerates only objects of type \p IterT.
    * @tparam IterT Class who's objects are enumerated
    * @tparam T Base class
