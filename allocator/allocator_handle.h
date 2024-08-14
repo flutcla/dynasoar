@@ -283,6 +283,21 @@ class AllocatorHandle {
   }
 
   /**
+   * Count free block
+   * @param scan Whether to scan the bitmap
+   * @return Number of free blocks
+   */
+  int count_free_block(bool scan = true) {
+    if (scan)
+    {
+      allocator_->global_free_.scan();
+    }
+    auto* num_soa_blocks_ptr = allocator_->global_free_.scan_num_bits_ptr();
+    auto num_soa_blocks = copy_from_device(num_soa_blocks_ptr);
+    return num_soa_blocks;
+  }
+
+  /**
    * Count allocated object roughly: counts the number of allocated objects of
    * type T. This is a rough estimate based on the number of allocated blocks.
    * @tparam T Type of object
