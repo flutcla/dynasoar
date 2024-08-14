@@ -348,8 +348,8 @@ struct ParallelExecutor {
           allocator->allocated_[kTypeIndex].scan_num_bits();
 
         // bound N_alloc with given bound
-        int N_bound = bound * kSize;
-        N_alloc = N_alloc < N_bound ? N_alloc : N_bound;
+        N_alloc = N_alloc < bound ? N_alloc : bound;
+
         // Round to multiple of kSize.
         int num_threads = ((blockDim.x * gridDim.x)/kSize)*kSize;
         int tid = blockIdx.x * blockDim.x + threadIdx.x;
