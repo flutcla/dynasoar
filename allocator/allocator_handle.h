@@ -263,6 +263,39 @@ class AllocatorHandle {
   }
 #endif  // OPTION_DEFRAG
 
+  /**
+   * Count allocated block: counts the number of allocated blocks of type T.
+   * @tparam T Type of object
+   * @param scan Whether to scan the bitmap
+   * @return Number of allocated blocks
+   */
+  template<class T>
+  int count_allocated_block(bool scan = true) {
+    static const int kTypeIndex = AllocatorT::template BlockHelper<T>::kIndex;
+    if (scan)
+    {
+      allocator_->allocated_[kTypeIndex].scan();
+    }
+    auto* num_soa_blocks_ptr = allocator_->allocated_[kTypeIndex].scan_num_bits_ptr();
+    auto num_soa_blocks = copy_from_device(num_soa_blocks_ptr);
+    gpuErrchk(cudaDeviceSynchronize());
+    return num_soa_blocks;
+  }
+
+  /**
+   * Count allocated object roughly: counts the number of allocated objects of
+   * type T. This is a rough estimate based on the number of allocated blocks.
+   * @tparam T Type of object
+   * @param scan Whether to scan the bitmap
+   * @return Number of allocated objects
+   */
+  template<class T>
+  int count_allocated_object_roughly(bool scan = true) {
+    auto num_soa_blocks = count_allocated_block<T>(scan);
+    static const int kSize = AllocatorT::template BlockHelper<T>::kSize;
+    return num_soa_blocks * kSize;
+  }
+
   void DBG_print_state_stats() {
     kernel_print_state_stats<<<1, 1>>>(allocator_);
     gpuErrchk(cudaDeviceSynchronize());
