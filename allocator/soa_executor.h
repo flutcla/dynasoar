@@ -41,6 +41,13 @@ __global__ static void kernel_parallel_do(AllocatorT* allocator, Args... args) {
   WrapperT::parallel_do_cuda(allocator, args...);
 }
 
+template<typename WrapperT, typename AllocatorT, typename... Args>
+__global__ static void kernel_parallel_do_bounded(AllocatorT* allocator, int bound, Args... args) {
+  // TODO: Check overhead of allocator pointer dereference.
+  // There is definitely a 2% overhead or so.....
+  WrapperT::parallel_do_cuda_bounded(allocator, bound, args...);
+}
+
 // Run member function on allocator, then perform do-all operation.
 /**
  * Same as kernel_parallel_do(), but runs a member function of the allocator
@@ -125,6 +132,13 @@ struct ParallelDoTypeHelperL1 {
                   std::forward<Args>(args)...);
           return true;  // true means "continue processing".
         }
+
+        static bool call(AllocatorT* allocator, int bound, Args...args) {
+          allocator->template parallel_do_single_type_bounded<
+              IterT, BaseClass, Args..., func, Scan>(
+                  bound, std::forward<Args>(args)...);
+          return true;  // true means "continue processing".
+        }
       };
 
       // IterT is not a subclass of BaseClass. Skip.
@@ -133,11 +147,20 @@ struct ParallelDoTypeHelperL1 {
         static bool call(AllocatorT* /*allocator*/, Args... /*args*/) {
           return true;
         }
+
+        static bool call(AllocatorT* /*allocator*/, int bound, Args... /*args*/) {
+          return true;
+        }
       };
 
       bool operator()(AllocatorT* allocator, Args... args) {
         return ClassSelector<std::is_base_of<BaseClass, IterT>::value, 0>
             ::call(allocator, std::forward<Args>(args)...);
+      }
+
+      bool operator()(AllocatorT* allocator, int bound, Args... args) {
+        return ClassSelector<std::is_base_of<BaseClass, IterT>::value, 0>
+            ::call(allocator, bound, std::forward<Args>(args)...);
       }
     };
   };
@@ -186,6 +209,49 @@ struct ParallelExecutor {
               <<<(total_threads + kCudaBlockSize - 1)/kCudaBlockSize,
                 kCudaBlockSize,
                 shared_mem_size>>>(allocator, std::forward<Args>(args)...);
+          gpuErrchk(cudaDeviceSynchronize());
+        } else {
+          time_end = std::chrono::system_clock::now();
+        }
+
+        auto elapsed = time_end - time_start;
+        auto micros = std::chrono::duration_cast<std::chrono::microseconds>(elapsed)
+            .count();
+        bench_prefix_sum_time += micros;
+      }
+
+      static void parallel_do_bounded(AllocatorT* allocator, int shared_mem_size,
+        int bound, Args... args) {
+        auto time_start = std::chrono::system_clock::now();
+        auto time_end = time_start;
+
+        if (Scan) {
+          // Initialize iteration: Perform scan operation on bitmap.
+          allocator->allocated_[kTypeIndex].scan();
+        }
+
+        // Determine number of CUDA threads.
+        auto* d_num_soa_blocks_ptr =
+          &allocator->allocated_[AllocatorT::template BlockHelper<IterT>::kIndex]
+          .data_.scan_data.enumeration_result_size;
+        auto num_soa_blocks = copy_from_device(d_num_soa_blocks_ptr);
+
+        if (num_soa_blocks > 0) {
+          // Limits the number of blocks.
+          num_soa_blocks = std::min(num_soa_blocks, bound);
+          member_func_kernel<AllocatorT,
+                             &AllocatorT::template initialize_iteration<IterT>>
+              <<<(num_soa_blocks + kCudaBlockSize - 1)/kCudaBlockSize,
+                 kCudaBlockSize>>>(allocator);
+          gpuErrchk(cudaDeviceSynchronize());
+
+          time_end = std::chrono::system_clock::now();
+
+          auto total_threads = num_soa_blocks * kSize;
+          kernel_parallel_do_bounded<ThisClass>
+              <<<(total_threads + kCudaBlockSize - 1)/kCudaBlockSize,
+                kCudaBlockSize,
+                shared_mem_size>>>(allocator, bound, std::forward<Args>(args)...);
           gpuErrchk(cudaDeviceSynchronize());
         } else {
           time_end = std::chrono::system_clock::now();
@@ -269,6 +335,38 @@ struct ParallelExecutor {
             if ((iteration_bitmap & (1ULL << thread_offset)) != 0ULL) {
               IterT* obj = allocator->template get_object<IterT>(
                   block, thread_offset);
+              // call the function.
+              (obj->*func)(std::forward<Args>(args)...);
+            }
+          }
+        }
+      }
+
+      static __device__ void parallel_do_cuda_bounded(AllocatorT* allocator, int bound,
+        Args... args) {
+        auto N_alloc =
+          allocator->allocated_[kTypeIndex].scan_num_bits();
+
+        // bound N_alloc with given bound
+        N_alloc = N_alloc < bound ? N_alloc : bound;
+
+        // Round to multiple of kSize.
+        int num_threads = ((blockDim.x * gridDim.x)/kSize)*kSize;
+        int tid = blockIdx.x * blockDim.x + threadIdx.x;
+        if (tid < num_threads) {
+          for (int j = tid/kSize; j < N_alloc; j += num_threads/kSize) {
+            // i is the index of in the scan array.
+            auto block_idx = allocator->allocated_[kTypeIndex].scan_get_index(j);
+            assert(block_idx <= kMaxInt32/64);
+
+            // TODO: Consider doing a scan over "allocated" bitmap.
+            auto* block = allocator->template get_block<IterT>(block_idx);
+            const auto& iteration_bitmap = block->iteration_bitmap;
+            int thread_offset = tid % kSize;
+
+            if ((iteration_bitmap & (1ULL << thread_offset)) != 0ULL) {
+              IterT* obj = allocator->template get_object<IterT>(
+                block, thread_offset);
               // call the function.
               (obj->*func)(std::forward<Args>(args)...);
             }
