@@ -169,6 +169,17 @@ class AllocatorHandle {
   }
 
   /**
+   * Like parallel_do, but limits the number of blocks
+   * @tparam T Base class
+   * @tparam func Member function to be run in parallel
+   * @param bound Number of blocks
+   */
+  template<class T, void(T::*func)()>
+  void parallel_do_bounded(int bound) {
+    allocator_->template parallel_do_bounded<true, T, func>(bound);
+  }
+
+  /**
    * Like parallel_do, but enumerates only objects of type \p IterT.
    * @tparam IterT Class who's objects are enumerated
    * @tparam T Base class

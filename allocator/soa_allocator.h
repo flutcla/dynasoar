@@ -550,6 +550,14 @@ class SoaAllocator {
         ::parallel_do(this, /*shared_mem_size=*/ 0);
   }
 
+  template<class IterT, class T, void(T::*func)(), bool Scan>
+  void parallel_do_single_type_bounded(int bound) {
+    ParallelExecutor<Scan, ThisAllocator, IterT, T>
+        ::template FunctionArgTypesWrapper<void, T>
+        ::template FunctionWrapper<func>
+        ::parallel_do_bounded(this, /*shared_mem_size=*/ 0, bound);
+  }
+
   /**
    * Parallel do-all: Run a member function \p func of class/struct \p T on all
    * objects of type \p IterT, not taking into account subclasses of \p IterT.
@@ -587,6 +595,14 @@ class SoaAllocator {
         ::template for_all<ParallelDoTypeHelperL1<>
         ::template ParallelDoTypeHelperL2<ThisAllocator, T, func, Scan>
         ::template ParallelDoTypeHelperL3>(this);
+  }
+
+  template<bool Scan, class T, void(T::*func)()>
+  void parallel_do_bounded(int bound) {
+    TupleHelper<Types...>
+        ::template for_all<ParallelDoTypeHelperL1<>
+        ::template ParallelDoTypeHelperL2<ThisAllocator, T, func, Scan>
+        ::template ParallelDoTypeHelperL3>(this, bound);
   }
 
   /**
