@@ -155,6 +155,13 @@ class AllocatorHandle {
     allocator_->template parallel_do<true, T, func>();
   }
 
+  template<class T, void(T::* func)()>
+  float parallel_do_measure() {
+    float millisecond = 0.0;
+    allocator_->template parallel_do_measure<true, T, func>(&millisecond);
+    return millisecond;
+  }
+
   /**
    * Parallel do-all: Same as parallel_do(), but the member function takes one
    * argument of type \p P1.
@@ -179,6 +186,13 @@ class AllocatorHandle {
     allocator_->template parallel_do_bounded<true, T, func>(bound);
   }
 
+  template<class T, void(T::* func)()>
+  float parallel_do_bounded_measure(int bound) {
+    float millisecond = 0.0;
+    allocator_->template parallel_do_bounded_measure<true, T, func>(bound, &millisecond);
+    return millisecond;
+  }
+
   /**
    * Same as parallel_do_bounded, but does omits the scan operation.
    * @tparam T Base class
@@ -200,6 +214,14 @@ class AllocatorHandle {
   void parallel_do_bounded_by_count(int bound) {
     static const int kSize = AllocatorT::template BlockHelper<T>::kSize;
     allocator_->template parallel_do_bounded<true, T, func>((bound + kSize - 1) / kSize);
+  }
+
+  template<class T, void(T::* func)()>
+  float parallel_do_bounded_by_count_measure(int bound) {
+    static const int kSize = AllocatorT::template BlockHelper<T>::kSize;
+    float millisecond = 0.0;
+    allocator_->template parallel_do_bounded_measure<true, T, func>((bound + kSize - 1) / kSize, &millisecond);
+    return millisecond;
   }
 
   /**

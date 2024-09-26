@@ -133,10 +133,24 @@ struct ParallelDoTypeHelperL1 {
           return true;  // true means "continue processing".
         }
 
+        static bool call(AllocatorT* allocator, float* milliseconds, Args...args) {
+          allocator->template parallel_do_single_type_measure<
+            IterT, BaseClass, Args..., func, Scan>(
+              milliseconds, std::forward<Args>(args)...);
+          return true;  // true means "continue processing".
+        }
+
         static bool call(AllocatorT* allocator, int bound, Args...args) {
           allocator->template parallel_do_single_type_bounded<
               IterT, BaseClass, Args..., func, Scan>(
                   bound, std::forward<Args>(args)...);
+          return true;  // true means "continue processing".
+        }
+
+        static bool call(AllocatorT* allocator, int bound, float* milliseconds, Args...args) {
+          allocator->template parallel_do_single_type_bounded_measure<
+            IterT, BaseClass, Args..., func, Scan>(
+              bound, milliseconds, std::forward<Args>(args)...);
           return true;  // true means "continue processing".
         }
       };
@@ -148,7 +162,15 @@ struct ParallelDoTypeHelperL1 {
           return true;
         }
 
+        static bool call(AllocatorT* /*allocator*/, float* milliseconds, Args... /*args*/) {
+          return true;
+        }
+
         static bool call(AllocatorT* /*allocator*/, int bound, Args... /*args*/) {
+          return true;
+        }
+
+        static bool call(AllocatorT* /*allocator*/, int bound, float* milliseconds, Args... /*args*/) {
           return true;
         }
       };
@@ -158,9 +180,19 @@ struct ParallelDoTypeHelperL1 {
             ::call(allocator, std::forward<Args>(args)...);
       }
 
+      bool operator()(AllocatorT* allocator, float* millisecond, Args... args) {
+        return ClassSelector<std::is_base_of<BaseClass, IterT>::value, 0>
+          ::call(allocator, millisecond, std::forward<Args>(args)...);
+      }
+
       bool operator()(AllocatorT* allocator, int bound, Args... args) {
         return ClassSelector<std::is_base_of<BaseClass, IterT>::value, 0>
             ::call(allocator, bound, std::forward<Args>(args)...);
+      }
+
+      bool operator()(AllocatorT* allocator, int bound, float* millisecond, Args... args) {
+        return ClassSelector<std::is_base_of<BaseClass, IterT>::value, 0>
+          ::call(allocator, bound, millisecond, std::forward<Args>(args)...);
       }
     };
   };
@@ -220,6 +252,55 @@ struct ParallelExecutor {
         bench_prefix_sum_time += micros;
       }
 
+      static void parallel_do_measure(AllocatorT* allocator, int shared_mem_size, float* milliseconds,
+        Args... args) {
+        auto time_start = std::chrono::system_clock::now();
+        auto time_end = time_start;
+
+        if (Scan) {
+          // Initialize iteration: Perform scan operation on bitmap.
+          allocator->allocated_[kTypeIndex].scan();
+        }
+
+        // Determine number of CUDA threads.
+        auto* d_num_soa_blocks_ptr =
+          &allocator->allocated_[AllocatorT::template BlockHelper<IterT>::kIndex]
+          .data_.scan_data.enumeration_result_size;
+        auto num_soa_blocks = copy_from_device(d_num_soa_blocks_ptr);
+
+        if (num_soa_blocks > 0) {
+          member_func_kernel<AllocatorT,
+            &AllocatorT::template initialize_iteration<IterT>>
+            <<<(num_soa_blocks + kCudaBlockSize - 1) / kCudaBlockSize,
+            kCudaBlockSize >> > (allocator);
+          gpuErrchk(cudaDeviceSynchronize());
+
+          time_end = std::chrono::system_clock::now();
+
+          auto total_threads = num_soa_blocks * kSize;
+          cudaEvent_t start, stop;
+          cudaEventCreate(&start);
+          cudaEventCreate(&stop);
+          cudaEventRecord(start);
+          kernel_parallel_do<ThisClass>
+            << <(total_threads + kCudaBlockSize - 1) / kCudaBlockSize,
+            kCudaBlockSize,
+            shared_mem_size >> > (allocator, std::forward<Args>(args)...);
+          gpuErrchk(cudaDeviceSynchronize());
+          cudaEventRecord(stop);
+          cudaEventSynchronize(stop);
+          cudaEventElapsedTime(milliseconds, start, stop);
+        }
+        else {
+          time_end = std::chrono::system_clock::now();
+        }
+
+        auto elapsed = time_end - time_start;
+        auto micros = std::chrono::duration_cast<std::chrono::microseconds>(elapsed)
+          .count();
+        bench_prefix_sum_time += micros;
+      }
+
       static void parallel_do_bounded(AllocatorT* allocator, int shared_mem_size,
         int bound, Args... args) {
         auto time_start = std::chrono::system_clock::now();
@@ -260,6 +341,57 @@ struct ParallelExecutor {
         auto elapsed = time_end - time_start;
         auto micros = std::chrono::duration_cast<std::chrono::microseconds>(elapsed)
             .count();
+        bench_prefix_sum_time += micros;
+      }
+
+      static void parallel_do_bounded_measure(AllocatorT* allocator, int shared_mem_size, int bound, float* milliseconds,
+        Args... args) {
+        auto time_start = std::chrono::system_clock::now();
+        auto time_end = time_start;
+
+        if (Scan) {
+          // Initialize iteration: Perform scan operation on bitmap.
+          allocator->allocated_[kTypeIndex].scan();
+        }
+
+        // Determine number of CUDA threads.
+        auto* d_num_soa_blocks_ptr =
+          &allocator->allocated_[AllocatorT::template BlockHelper<IterT>::kIndex]
+          .data_.scan_data.enumeration_result_size;
+        auto num_soa_blocks = copy_from_device(d_num_soa_blocks_ptr);
+
+        if (num_soa_blocks > 0) {
+          // Limits the number of blocks.
+          num_soa_blocks = std::min(num_soa_blocks, bound);
+          member_func_kernel<AllocatorT,
+            &AllocatorT::template initialize_iteration<IterT>>
+            <<<(num_soa_blocks + kCudaBlockSize - 1) / kCudaBlockSize,
+            kCudaBlockSize >> > (allocator);
+          gpuErrchk(cudaDeviceSynchronize());
+
+          time_end = std::chrono::system_clock::now();
+
+          auto total_threads = num_soa_blocks * kSize;
+          cudaEvent_t start, stop;
+          cudaEventCreate(&start);
+          cudaEventCreate(&stop);
+          cudaEventRecord(start);
+          kernel_parallel_do<ThisClass>
+            << <(total_threads + kCudaBlockSize - 1) / kCudaBlockSize,
+            kCudaBlockSize,
+            shared_mem_size >> > (allocator, std::forward<Args>(args)...);
+          gpuErrchk(cudaDeviceSynchronize());
+          cudaEventRecord(stop);
+          cudaEventSynchronize(stop);
+          cudaEventElapsedTime(milliseconds, start, stop);
+        }
+        else {
+          time_end = std::chrono::system_clock::now();
+        }
+
+        auto elapsed = time_end - time_start;
+        auto micros = std::chrono::duration_cast<std::chrono::microseconds>(elapsed)
+          .count();
         bench_prefix_sum_time += micros;
       }
 

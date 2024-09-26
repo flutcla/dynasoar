@@ -550,12 +550,28 @@ class SoaAllocator {
         ::parallel_do(this, /*shared_mem_size=*/ 0);
   }
 
+  template<class IterT, class T, void(T::* func)(), bool Scan>
+  void parallel_do_single_type_measure(float* milliseconds) {
+    ParallelExecutor<Scan, ThisAllocator, IterT, T>
+      ::template FunctionArgTypesWrapper<void, T>
+      ::template FunctionWrapper<func>
+      ::parallel_do_measure(this, /*shared_mem_size=*/ 0, milliseconds);
+  }
+
   template<class IterT, class T, void(T::*func)(), bool Scan>
   void parallel_do_single_type_bounded(int bound) {
     ParallelExecutor<Scan, ThisAllocator, IterT, T>
         ::template FunctionArgTypesWrapper<void, T>
         ::template FunctionWrapper<func>
         ::parallel_do_bounded(this, /*shared_mem_size=*/ 0, bound);
+  }
+
+  template<class IterT, class T, void(T::* func)(), bool Scan>
+  void parallel_do_single_type_bounded_measure(int bound, float* milliseconds) {
+    ParallelExecutor<Scan, ThisAllocator, IterT, T>
+      ::template FunctionArgTypesWrapper<void, T>
+      ::template FunctionWrapper<func>
+      ::parallel_do_bounded_measure(this, /*shared_mem_size=*/ 0, bound, milliseconds);
   }
 
   /**
@@ -597,12 +613,28 @@ class SoaAllocator {
         ::template ParallelDoTypeHelperL3>(this);
   }
 
+  template<bool Scan, class T, void(T::* func)()>
+  void parallel_do_measure(float* milliseconds) {
+    TupleHelper<Types...>
+      ::template for_all<ParallelDoTypeHelperL1<>
+      ::template ParallelDoTypeHelperL2<ThisAllocator, T, func, Scan>
+      ::template ParallelDoTypeHelperL3>(this, milliseconds);
+  }
+
   template<bool Scan, class T, void(T::*func)()>
   void parallel_do_bounded(int bound) {
     TupleHelper<Types...>
         ::template for_all<ParallelDoTypeHelperL1<>
         ::template ParallelDoTypeHelperL2<ThisAllocator, T, func, Scan>
         ::template ParallelDoTypeHelperL3>(this, bound);
+  }
+
+  template<bool Scan, class T, void(T::* func)()>
+  void parallel_do_bounded_measure(int bound, float* milliseconds) {
+    TupleHelper<Types...>
+      ::template for_all<ParallelDoTypeHelperL1<>
+      ::template ParallelDoTypeHelperL2<ThisAllocator, T, func, Scan>
+      ::template ParallelDoTypeHelperL3>(this, bound, milliseconds);
   }
 
   /**
